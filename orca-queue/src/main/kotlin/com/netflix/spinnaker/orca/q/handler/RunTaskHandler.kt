@@ -93,14 +93,12 @@ class RunTaskHandler(
                 }
                 CANCELED                             -> {
                   task.onCancel(stage)
-                  val status = stage.failureStatus(default = result.status)
-                  queue.push(CompleteTask(message, status, result.status))
-                  trackResult(stage, taskModel, status)
+                  queue.push(CompleteTask(message, result.status, result.status))
+                  trackResult(stage, taskModel, result.status)
                 }
                 TERMINAL                             -> {
-                  val status = stage.failureStatus(default = result.status)
-                  queue.push(CompleteTask(message, status, result.status))
-                  trackResult(stage, taskModel, status)
+                  queue.push(CompleteTask(message, result.status, result.status))
+                  trackResult(stage, taskModel, result.status)
                 }
                 else                                 ->
                   TODO("Unhandled task status ${result.status}")
@@ -120,8 +118,8 @@ class RunTaskHandler(
           log.error("Error running ${message.taskType.simpleName} for ${message.executionType}[${message.executionId}]", e)
           stage.context["exception"] = exceptionDetails
           repository.storeStage(stage)
-          queue.push(CompleteTask(message, stage.failureStatus()))
-          trackResult(stage, taskModel, stage.failureStatus())
+          queue.push(CompleteTask(message, TERMINAL))
+          trackResult(stage, taskModel, TERMINAL)
         }
       }
     }
@@ -263,10 +261,3 @@ class RunTaskHandler(
     }
   }
 }
-
-private fun Stage.failureStatus(default: ExecutionStatus = TERMINAL) =
-  when {
-    shouldContinueOnFailure() -> FAILED_CONTINUE
-    shouldFailPipeline()      -> default
-    else                      -> STOPPED
-  }

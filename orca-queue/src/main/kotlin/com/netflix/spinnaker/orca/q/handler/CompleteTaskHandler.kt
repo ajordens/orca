@@ -20,6 +20,8 @@ import com.netflix.spinnaker.orca.ExecutionStatus
 import com.netflix.spinnaker.orca.ExecutionStatus.*
 import com.netflix.spinnaker.orca.events.TaskComplete
 import com.netflix.spinnaker.orca.ext.nextTask
+import com.netflix.spinnaker.orca.ext.shouldContinueOnFailure
+import com.netflix.spinnaker.orca.ext.shouldFailPipeline
 import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.pipeline.model.Task
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
@@ -42,16 +44,22 @@ class CompleteTaskHandler(
 
   override fun handle(message: CompleteTask) {
     message.withTask { stage, task ->
-      task.status = message.status
+      val status = when (message.originalStatus) {
+        CANCELED, TERMINAL -> stage.failureStatus(default = message.originalStatus)
+        null -> message.status
+        else -> message.originalStatus
+      }
+
+      task.status = status
       task.endTime = clock.millis()
       val mergedContextStage = stage.withMergedContext()
 
-      if (message.status == REDIRECT) {
+      if (status == REDIRECT) {
         mergedContextStage.handleRedirect()
       } else {
         repository.storeStage(mergedContextStage)
 
-        if (shouldCompleteStage(task, message.status, message.originalStatus)) {
+        if (shouldCompleteStage(task, status, message.originalStatus)) {
           queue.push(CompleteStage(message))
         } else {
           mergedContextStage.nextTask(task).let {
@@ -97,4 +105,11 @@ class CompleteTaskHandler(
       queue.push(StartTask(execution.type, execution.id, execution.application, id, tasks[start].id))
     }
   }
+
+  private fun Stage.failureStatus(default: ExecutionStatus = TERMINAL) =
+    when {
+      shouldContinueOnFailure() -> FAILED_CONTINUE
+      shouldFailPipeline()      -> default
+      else                      -> STOPPED
+    }
 }
