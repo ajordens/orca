@@ -27,9 +27,11 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static java.lang.String.format;
 import static java.util.stream.Collectors.toList;
@@ -62,7 +64,12 @@ public abstract class ImageTagger {
     this.objectMapper = objectMapper;
   }
 
-  protected Collection findImages(Collection<String> imageNames, Collection<String> consideredStageRefIds, Stage stage, Class matchedImageType) {
+  protected Collection findImages(Collection<String> imageNames,
+                                  Collection<String> consideredStageRefIds,
+                                  Stage stage,
+                                  Class matchedImageType) {
+    Map<String, Object> foundImagesByName = new HashMap<>();
+
     if (imageNames == null || imageNames.isEmpty()) {
       imageNames = new HashSet<>();
 
@@ -79,26 +86,37 @@ public abstract class ImageTagger {
           throw new ImageNotFound(format("No image found (imageId: %s)", upstreamImageId), true);
         }
 
-        String upstreamImageName = (String) allMatchedImages.get(0).get("imageName");
-        imageNames.add(upstreamImageName);
+        Map matchedImage = allMatchedImages.get(0);
+        String upstreamImageName = (String) matchedImage.get("imageName");
+
+        if (upstreamImageName.equalsIgnoreCase(upstreamImageId)) {
+          foundImagesByName.put(
+            upstreamImageName,
+            objectMapper.convertValue(matchedImage, matchedImageType)
+          );
+        } else {
+          imageNames.add(upstreamImageName);
+        }
 
         log.info(format("Found upstream image '%s' (executionId: %s)", upstreamImageName, stage.getExecution().getId()));
       }
     }
 
-    Collection foundImages = new ArrayList();
-
     for (String targetImageName : imageNames) {
+      if (foundImagesByName.containsKey(targetImageName)) {
+        continue;
+      }
+
       List<Map> allMatchedImages = oortService.findImage(getCloudProvider(), targetImageName, null, null, null);
       Map matchedImage = allMatchedImages.stream()
         .filter(image -> image.get("imageName").equals(targetImageName))
         .findFirst()
         .orElseThrow(() -> new ImageNotFound(format("No image found (imageName: %s)", targetImageName), false));
 
-      foundImages.add(objectMapper.convertValue(matchedImage, matchedImageType));
+      foundImagesByName.put(targetImageName, objectMapper.convertValue(matchedImage, matchedImageType));
     }
 
-    return foundImages;
+    return foundImagesByName.values();
   }
 
   @VisibleForTesting
@@ -112,10 +130,13 @@ public abstract class ImageTagger {
       }).collect(toList());
 
     return imageProvidingAncestorStages.stream().map(it -> {
-      if (it.getContext().containsKey("imageId")) {
+      if (it.getContext().containsKey("imageName")) {
+        return (String) it.getContext().get("imageName");
+      } else if (it.getContext().containsKey("imageId")) {
         return (String) it.getContext().get("imageId");
       } else {
-        return (String) ((List<Map>) it.getContext().get("amiDetails")).get(0).get("imageId");
+        Map amiDetails = ((List<Map>) it.getContext().get("amiDetails")).get(0);
+        return (String) Optional.ofNullable(amiDetails.get("imageName")).orElse(amiDetails.get("imageId"));
       }
     }).collect(toList());
   }
